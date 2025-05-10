@@ -1,0 +1,18 @@
+[project]
+name = "gpx2routecard"
+version = "0.1.0"
+description = "GPX to route card Excel tool"
+authors = [ { name = "Peter Davison-Reiber" } ]
+requires-python = ">=3.8"
+dependencies = [
+    "pandas",
+    "gpxpy",
+    "openpyxl",
+    "OSGridConverter"
+]
+
+[tool.setuptools]
+packages = ["gpx2routecard"]
+
+[project.scripts]
+gpx2routecard = "gpx2routecard.main:main" 
