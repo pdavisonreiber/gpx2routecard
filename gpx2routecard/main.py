@@ -100,13 +100,34 @@ def extract_named_waypoints(gpx_file):
 	ascents.append('')
 	
 	for i, (name, desc, lat, lon, grid_ref) in enumerate(named_points):
+		# Extract escape notes from description if present
+		escape_notes = ''
+		description = desc
+		if desc:
+			# Look for escape notes in various formats
+			escape_patterns = [
+				'escape notes:', 'escape note:', 'escape route:',
+				'escape notes', 'escape note', 'escape route'
+			]
+			desc_lower = desc.lower()
+			for pattern in escape_patterns:
+				if pattern in desc_lower:
+					# Find the actual pattern in the original text (case preserved)
+					pattern_idx = desc_lower.find(pattern)
+					parts = [desc[:pattern_idx], desc[pattern_idx + len(pattern):]]
+					if len(parts) > 1:
+						escape_notes = parts[1].strip()
+						description = parts[0].strip()
+						break
+		
 		waypoints.append({
 			'grid_reference': str(grid_ref).rjust(8),  # Right-align grid references
 			'name': name,
 			'distance_from_last_km': distances[i-1] if i > 0 else '',  # Empty for START, distance for others
 			'bearing': bearings[i],
-			'description': desc,
-			'ascent': ascents[i]  # Add ascent/descent in meters
+			'description': description,
+			'ascent': ascents[i],  # Add ascent/descent in meters
+			'escape_notes': escape_notes
 		})
 	return waypoints
 
@@ -133,75 +154,66 @@ def main():
 			print("No waypoints found in the GPX file", file=sys.stderr)
 			sys.exit(1)
 		df = pd.DataFrame(waypoints)
-		df = df[['grid_reference', 'name', 'distance_from_last_km', 'bearing', 'ascent', 'description']]
-		
-		# Add empty Escape Notes column
-		df['escape_notes'] = ''
+		df = df[['grid_reference', 'name', 'distance_from_last_km', 'bearing', 'ascent', 'description', 'escape_notes']]
 		
 		# Set custom column headings
-		df.columns = ['Grid Reference', 'Waypoint', 'Distance (km)', 'Bearing', 'Ascent (m)', 'Description', 'Escape Notes']
+		df.columns = ['Grid Reference', 'Waypoint', 'Length (km)', 'Bearing', 'Ascent (m)', 'Description', 'Escape Notes']
 		
 		with pd.ExcelWriter(outp, engine='openpyxl') as writer:
-			df.to_excel(writer, index=False, header=True, sheet_name='Route Card')
+			# First write the data without creating a table
+			df.to_excel(writer, index=False, header=True, sheet_name='Route Card', startrow=2)
 			worksheet = writer.sheets['Route Card']
+			
+			# Add title in cell A1
+			title_cell = worksheet['A1']
+			title_cell.value = os.path.splitext(os.path.basename(inp))[0]
+			title_cell.font = openpyxl.styles.Font(size=24, bold=True)
 			
 			# Set column widths
 			worksheet.column_dimensions['A'].width = 15  # Grid Reference
-			worksheet.column_dimensions['B'].width = 20  # Waypoint
-			worksheet.column_dimensions['C'].width = 20  # Distance from Last
+			worksheet.column_dimensions['B'].width = 15  # Waypoint
+			worksheet.column_dimensions['C'].width = 10  # Distance from Last
 			worksheet.column_dimensions['D'].width = 10  # Bearing
-			worksheet.column_dimensions['E'].width = 20  # Elevation Change
-			worksheet.column_dimensions['F'].width = 15  # Time
-			worksheet.column_dimensions['G'].width = 15  # Rest Time
-			worksheet.column_dimensions['H'].width = 15  # Arrival Time
-			worksheet.column_dimensions['I'].width = 60  # Description
-			worksheet.column_dimensions['J'].width = 30  # Escape Notes
+			worksheet.column_dimensions['E'].width = 10  # Elevation Change
+			worksheet.column_dimensions['F'].width = 10  # Time
+			worksheet.column_dimensions['G'].width = 10  # Rest Time
+			worksheet.column_dimensions['H'].width = 10  # Arrival Time
+			worksheet.column_dimensions['I'].width = 50  # Description
+			worksheet.column_dimensions['J'].width = 25  # Escape Notes
 			
 			# Insert Time column after Ascent
 			worksheet.insert_cols(6)
-			worksheet.cell(row=1, column=6, value='Time (min)')
+			worksheet.cell(row=3, column=6, value='Time (min)')  # Header is now in row 3
 			
 			# Add time formula to each row
-			for row in range(2, len(df) + 2):
-				# Simple formula using cell references
+			for row in range(4, len(df) + 4):  # Start from row 4 (data starts at row 4)
 				formula = f'=IF(AND(C{row}<>"",E{row}<>""),C{row}*20+E{row}/10,"")'
 				worksheet.cell(row=row, column=6, value=formula)
 			
 			# Insert Rest Time column after Time
 			worksheet.insert_cols(7)
-			worksheet.cell(row=1, column=7, value='Rest (min)')
+			worksheet.cell(row=3, column=7, value='Rest (min)')  # Header is now in row 3
 			
 			# Add rest time formula to each row
-			for row in range(2, len(df) + 2):
-				if row == 2:
-					# First row (START) gets empty
+			for row in range(4, len(df) + 4):  # Start from row 4
+				if row == 4:  # First data row
 					formula = '=""'
 				else:
-					# All other rows get 10 minutes
 					formula = '=10'
 				worksheet.cell(row=row, column=7, value=formula)
 			
 			# Insert Arrival Time column after Rest Time
 			worksheet.insert_cols(8)
-			worksheet.cell(row=1, column=8, value='Arrival Time')
+			worksheet.cell(row=3, column=8, value='Arrival')  # Header is now in row 3
 			
 			# Add arrival time formula to each row
-			for row in range(2, len(df) + 2):
-				if row == 2:
-					# First row (START) gets 08:00
+			for row in range(4, len(df) + 4):  # Start from row 4
+				if row == 4:  # First data row
 					formula = '=TIME(8,0,0)'
 				else:
-					# Subsequent rows add the time and rest from current row to previous arrival time
 					formula = f'=IF(F{row}<>"",H{row-1}+TIME(0,F{row}+G{row},0),"")'
 				cell = worksheet.cell(row=row, column=8, value=formula)
-				cell.number_format = 'hh:mm'  # Format as time
-			
-			# Create a table with formatting
-			table = openpyxl.worksheet.table.Table(
-				displayName="RouteCardTable",
-				ref=f"A1:J{len(df) + 1}"
-			)
-			worksheet.add_table(table)
+				cell.number_format = 'hh:mm'
 			
 			# Add borders and alternating row colors
 			thin_border = openpyxl.styles.Border(
@@ -212,7 +224,7 @@ def main():
 			)
 			
 			# Apply borders and alternating colors to all cells
-			for row_idx, row in enumerate(worksheet.iter_rows(min_row=1, max_row=len(df) + 1, min_col=1, max_col=10), 1):
+			for row_idx, row in enumerate(worksheet.iter_rows(min_row=3, max_row=len(df) + 3, min_col=1, max_col=10), 1):
 				for cell in row:
 					cell.border = thin_border
 					if row_idx > 1 and row_idx % 2 == 0:  # Even rows after header
@@ -220,13 +232,13 @@ def main():
 			
 			# Make header row bold and center-aligned with gray background
 			header_fill = openpyxl.styles.PatternFill(start_color='D9D9D9', end_color='D9D9D9', fill_type='solid')
-			for cell in worksheet[1]:
+			for cell in worksheet[3]:  # Header is in row 3
 				cell.font = cell.font.copy(bold=True)
 				cell.alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center')
 				cell.fill = header_fill
 			
 			# Set cell alignments for data rows
-			for row in worksheet.iter_rows(min_row=2, max_row=len(df) + 1):
+			for row in worksheet.iter_rows(min_row=4, max_row=len(df) + 3):
 				# Grid Reference - centered
 				row[0].alignment = openpyxl.styles.Alignment(horizontal='center', vertical='center')
 				# Waypoint - wrapped and centered
